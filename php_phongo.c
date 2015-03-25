@@ -1672,13 +1672,10 @@ PHP_MINIT_FUNCTION(mongodb)
 
 	REGISTER_INI_ENTRIES();
 
-	printf("using function %p\n", bson_mem_get_vtable().calloc);
 	/* Initialize libbson */
-	/* bson_mem_set_vtable(&MONGODB_G(bsonMemVTable));*/
-	printf("using function %p\n", bson_mem_get_vtable().calloc);
+	bson_mem_set_vtable(&MONGODB_G(bsonMemVTable));
 	/* Initialize libmongoc */
 	mongoc_init();
-	printf("using function %p\n", bson_mem_get_vtable().calloc);
 	mongoc_log_set_handler(php_phongo_log, ctx);
 
 	/* Prep default object handlers to be used when we register the classes */
@@ -1767,9 +1764,7 @@ PHP_MSHUTDOWN_FUNCTION(mongodb)
 	(void)type; /* We don't care if we are loaded via dl() or extension= */
 
 	/* Cleanup after libmongoc */
-	printf("using function %p\n", bson_mem_get_vtable().calloc);
 	mongoc_cleanup();
-	printf("using function %p\n", bson_mem_get_vtable().calloc);
 
 	UNREGISTER_INI_ENTRIES();
 
