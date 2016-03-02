@@ -525,8 +525,10 @@ mongoc_bulk_operation_t *phongo_bulkwrite_init(zend_bool ordered) { /* {{{ */
 static void phongo_bulk_write_error_add_message(char **tmp_msg, bson_t *errors)
 {
 	bson_iter_t iter;
+	size_t tmp_msglen;
 
 	bson_iter_init(&iter, errors);
+	tmp_msglen = strlen(*tmp_msg);
 
 	while (bson_iter_next(&iter)) {
 		bson_t cbson;
@@ -545,11 +547,14 @@ static void phongo_bulk_write_error_add_message(char **tmp_msg, bson_t *errors)
 		}
 
 		if (bson_iter_init_find(&inner_iter, &cbson, "errmsg") && BSON_ITER_HOLDS_UTF8(&inner_iter)) {
-			const char *tmp_errmsg = bson_iter_utf8(&inner_iter, NULL);
+			char *tmp_errmsg = (char*) bson_iter_utf8(&inner_iter, NULL);
+			size_t tmp_errmsglen = strlen(tmp_errmsg);
 
-			*tmp_msg = erealloc(*tmp_msg, strlen(*tmp_msg) + strlen(tmp_errmsg) + 5);
-			strncpy(*tmp_msg + strlen(*tmp_msg), " :: ", 5);
-			strncpy(*tmp_msg + strlen(*tmp_msg), tmp_errmsg, strlen(tmp_errmsg) + 1);
+			*tmp_msg = erealloc(*tmp_msg, tmp_msglen + tmp_errmsglen + 5);
+			strncpy(*tmp_msg + tmp_msglen, " :: ", 5);
+			tmp_msglen += 4;
+			strncpy(*tmp_msg + tmp_msglen, tmp_errmsg, tmp_errmsglen + 1);
+			tmp_msglen += tmp_errmsglen;
 		}
 	}
 }
