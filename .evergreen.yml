@@ -12,7 +12,7 @@ tasks:
 
 buildvariants:
 - name: linux-64
-  display_name: Linux-64
+  display_name: "Linux 64"
   run_on:
   - ubuntu1604-test
   tasks:
