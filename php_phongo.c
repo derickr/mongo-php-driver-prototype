@@ -1387,6 +1387,161 @@ static void php_phongo_free_ssl_opt(mongoc_ssl_opt_t *ssl_opt)
 	efree(ssl_opt);
 }
 
+char *php_phongo_make_manager_hash_from_id(int manager_id TSRMLS_DC)
+{
+	char                 *hash;
+	int                   hash_len;
+
+	hash_len = spprintf(&hash, 0, "MANAGER-%09d", manager_id);
+
+	return hash;
+}
+
+static zval *php_phongo_find_manager_by_id(int manager_id)
+{
+	zval *retval = NULL;
+	char *hash = php_phongo_make_manager_hash_from_id(manager_id);
+	zval **z_manager;
+	TSRMLS_FETCH();
+
+	if (zend_hash_find(&MONGODB_G(managers), hash, sizeof(hash), (void**) &z_manager) == SUCCESS) {
+		retval = *z_manager;
+	}
+
+	efree(hash);
+	return retval;
+}
+
+/* APM callbacks */
+static void php_phongo_command_started(const mongoc_apm_command_started_t *event)
+{
+	int manager_id = (intptr_t) mongoc_apm_command_started_get_context(event);
+	zval *z_manager = php_phongo_find_manager_by_id(manager_id);
+	php_phongo_manager_t *manager;
+	php_phongo_commandstartedevent_t *p_event;
+	zval *z_event = NULL;
+#if PHP_VERSION_ID < 70000
+	HashPosition pos;
+#endif
+
+//printf( "php_phongo_command_started: manager ID: %d\n", manager_id);
+	
+	if (z_manager == NULL) {
+		//printf( "No manager found\n" );
+		return;
+	}
+//printf( "Manager found\n" );
+	manager = Z_MANAGER_OBJ_P(z_manager);
+
+	/* Check for subscriber size */
+//printf(" Number of subscribers: %d\n", zend_hash_num_elements(&manager->subscribers));
+	if (zend_hash_num_elements(&manager->subscribers) == 0) {
+		return;
+	}
+
+#if PHP_VERSION_ID >= 70000
+	z_event = emalloc(sizeof(zval));
+#else
+	MAKE_STD_ZVAL(z_event);
+#endif
+	
+	object_init_ex(z_event, php_phongo_commandstartedevent_ce);
+	p_event = Z_COMMANDSTARTEDEVENT_OBJ_P(z_event);
+	p_event->command_name = estrdup(mongoc_apm_command_started_get_command_name(event));
+	p_event->server_id = mongoc_apm_command_started_get_server_id(event);
+	p_event->operation_id = mongoc_apm_command_started_get_operation_id(event);
+	p_event->request_id = mongoc_apm_command_started_get_request_id(event);
+	p_event->command = bson_copy(mongoc_apm_command_started_get_command(event));
+	p_event->database_name = estrdup(mongoc_apm_command_started_get_database_name(event));
+	p_event->manager = z_manager;
+	Z_ADDREF_P(z_manager);
+		
+#if PHP_VERSION_ID >= 70000
+	{
+		zval        *value;
+
+		ZEND_HASH_FOREACH_VAL(&manager->subscribers, value) {
+			zend_call_method_with_1_params(value, NULL, NULL, "commandStarted", NULL, z_event);
+		} ZEND_HASH_FOREACH_END();
+	}
+#else
+	zend_hash_internal_pointer_reset_ex(&manager->subscribers, &pos);
+	for (;; zend_hash_move_forward_ex(&manager->subscribers, &pos)) {
+		zval  **value;
+
+		if (zend_hash_get_current_data_ex(&manager->subscribers, (void **) &value, &pos) == FAILURE) {
+			break;
+		}
+			
+		zend_call_method_with_1_params(value, NULL, NULL, "commandStarted", NULL, z_event);
+	}
+#endif
+
+	zval_ptr_dtor(&z_event);
+}
+
+static void php_phongo_command_succeeded(const mongoc_apm_command_succeeded_t *event)
+{
+#if 0
+	zval *z_manager = (zval*) mongoc_apm_command_succeeded_get_context(event);
+	php_phongo_manager_t *manager = Z_MANAGER_OBJ_P(z_manager);
+
+	Array subscribers = obj_context->o_get(s_MongoDBDriverManager_subscribers, false, s_MongoDriverManager_className).toArray();
+
+	if (subscribers.size() < 1) {
+		return;
+	}
+
+	c_event = Unit::lookupClass(s_MongoDriverMonitoringCommandSucceededEvent_className.get());
+	Object o_event = Object{c_event};
+	o_event->o_set(s_MongoDriverMonitoringCommandEvent_commandName, Variant(mongoc_apm_command_succeeded_get_command_name(event)), s_MongoDriverMonitoringCommandEvent_className);
+	o_event->o_set(s_MongoDriverMonitoringCommandEvent_server, Variant(hippo_mongo_driver_server_create_from_id(data->m_client, mongoc_apm_command_succeeded_get_server_id(event))), s_MongoDriverMonitoringCommandEvent_className);
+	o_event->o_set(s_MongoDriverMonitoringCommandEvent_operationId, Variant(mongoc_apm_command_succeeded_get_operation_id(event)), s_MongoDriverMonitoringCommandEvent_className);
+	o_event->o_set(s_MongoDriverMonitoringCommandEvent_requestId, Variant(mongoc_apm_command_succeeded_get_request_id(event)), s_MongoDriverMonitoringCommandEvent_className);
+	o_event->o_set(s_MongoDriverMonitoringCommandResultEvent_durationMicros, Variant(mongoc_apm_command_succeeded_get_duration(event)), s_MongoDriverMonitoringCommandResultEvent_className);
+
+	/* Add the reply */
+	Variant v_reply;
+	const bson_t *b_reply = mongoc_apm_command_succeeded_get_reply(event);
+	hippo_bson_conversion_options_t options = HIPPO_TYPEMAP_INITIALIZER;
+	BsonToVariantConverter convertor(bson_get_data(b_reply), b_reply->len, options);
+	convertor.convert(&v_reply);
+	o_event->o_set(s_MongoDriverMonitoringCommandSucceededEvent_reply, v_reply, s_MongoDriverMonitoringCommandSucceededEvent_className);
+
+	TypedValue args[1] = { *(Variant(o_event)).asCell() };
+
+	g_context->invokeFuncFew(
+		result.asTypedValue(),
+		m, obj_context,
+		nullptr, 1, args
+	);
+#endif
+}
+
+static void php_phongo_command_failed(const mongoc_apm_command_failed_t *event)
+{
+}
+
+
+/* Sets the callbacks for APM */
+int php_phongo_set_monitoring_callbacks(mongoc_client_t *client, zval *manager TSRMLS_DC)
+{
+	int                   retval;
+	php_phongo_manager_t *intern = Z_MANAGER_OBJ_P(manager);
+
+	mongoc_apm_callbacks_t *callbacks = mongoc_apm_callbacks_new();
+
+	mongoc_apm_set_command_started_cb(callbacks, php_phongo_command_started);
+	mongoc_apm_set_command_succeeded_cb(callbacks, php_phongo_command_succeeded);
+	mongoc_apm_set_command_failed_cb(callbacks, php_phongo_command_failed);
+//printf( "Setting context manager ID: %d\n", intern->manager_id);
+	retval = mongoc_client_set_apm_callbacks(client, callbacks, (void*)(intptr_t)intern->manager_id);
+
+	mongoc_apm_callbacks_destroy(callbacks);
+
+	return retval;
+}
+
 /* Creates a hash for a client by concatenating the URI string with serialized
  * options arrays. On success, a persistent string is returned (i.e. pefree()
  * should be used to free it) and hash_len will be set to the string's length.
@@ -2004,6 +2159,9 @@ PHP_GINIT_FUNCTION(mongodb)
 	mongodb_globals->debug_fd = NULL;
 	mongodb_globals->bsonMemVTable = bsonMemVTable;
 
+	/* Initialize HashTable to keep track of managers and their ID */
+//printf( "Creating hash for manager_id -> manager zval\n" );
+	zend_hash_init(&mongodb_globals->managers, 0, NULL, ZVAL_PTR_DTOR, 0);
 }
 /* }}} */
 
@@ -2097,6 +2255,12 @@ PHP_MINIT_FUNCTION(mongodb)
 	PHP_MINIT(ExecutionTimeoutException)(INIT_FUNC_ARGS_PASSTHRU);
 	PHP_MINIT(ConnectionTimeoutException)(INIT_FUNC_ARGS_PASSTHRU);
 
+	PHP_MINIT(Subscriber)(INIT_FUNC_ARGS_PASSTHRU);
+	PHP_MINIT(CommandSubscriber)(INIT_FUNC_ARGS_PASSTHRU);
+	PHP_MINIT(CommandStartedEvent)(INIT_FUNC_ARGS_PASSTHRU);
+	PHP_MINIT(CommandSucceededEvent)(INIT_FUNC_ARGS_PASSTHRU);
+	PHP_MINIT(CommandFailedEvent)(INIT_FUNC_ARGS_PASSTHRU);
+
 	REGISTER_STRING_CONSTANT("MONGODB_VERSION", (char *)MONGODB_VERSION_S, CONST_CS | CONST_PERSISTENT);
 	REGISTER_STRING_CONSTANT("MONGODB_STABILITY", (char *)MONGODB_STABILITY_S, CONST_CS | CONST_PERSISTENT);
 
@@ -2131,6 +2295,8 @@ PHP_GSHUTDOWN_FUNCTION(mongodb)
 		fclose(mongodb_globals->debug_fd);
 		mongodb_globals->debug_fd = NULL;
 	}
+//printf( "Destroying hash for manager_id -> manager zval\n" );
+	zend_hash_destroy(&mongodb_globals->managers);
 }
 /* }}} */
 

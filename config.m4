@@ -201,6 +201,13 @@ if test "$MONGODB" != "no"; then
       src/MongoDB/Exception/WriteException.c \
       src/MongoDB/Exception/BulkWriteException.c \
   ";
+  MONGODB_MONGODB_MONITORING="\
+      src/MongoDB/Monitoring/Subscriber.c \
+      src/MongoDB/Monitoring/CommandSubscriber.c \
+      src/MongoDB/Monitoring/CommandStartedEvent.c \
+      src/MongoDB/Monitoring/CommandSucceededEvent.c \
+      src/MongoDB/Monitoring/CommandFailedEvent.c \
+  ";
 
   YAJL_SOURCES="\
     yajl_version.c \
@@ -335,11 +342,13 @@ if test "$MONGODB" != "no"; then
     PHP_ADD_SOURCES(PHP_EXT_DIR(mongodb), $MONGODB_BSON_CLASSES)
     PHP_ADD_SOURCES(PHP_EXT_DIR(mongodb), $MONGODB_MONGODB_CLASSES)
     PHP_ADD_SOURCES(PHP_EXT_DIR(mongodb), $MONGODB_MONGODB_EXCEPTIONS)
+    PHP_ADD_SOURCES(PHP_EXT_DIR(mongodb), $MONGODB_MONGODB_MONITORING)
   else
     PHP_ADD_SOURCES_X(PHP_EXT_DIR(mongodb), $MONGODB_BSON,               [$STD_CFLAGS $MAINTAINER_CFLAGS $COVERAGE_CFLAGS], shared_objects_mongodb, yes)
     PHP_ADD_SOURCES_X(PHP_EXT_DIR(mongodb), $MONGODB_BSON_CLASSES,       [$STD_CFLAGS $MAINTAINER_CFLAGS $COVERAGE_CFLAGS], shared_objects_mongodb, yes)
     PHP_ADD_SOURCES_X(PHP_EXT_DIR(mongodb), $MONGODB_MONGODB_CLASSES,    [$STD_CFLAGS $MAINTAINER_CFLAGS $COVERAGE_CFLAGS], shared_objects_mongodb, yes)
     PHP_ADD_SOURCES_X(PHP_EXT_DIR(mongodb), $MONGODB_MONGODB_EXCEPTIONS, [$STD_CFLAGS $MAINTAINER_CFLAGS $COVERAGE_CFLAGS], shared_objects_mongodb, yes)
+    PHP_ADD_SOURCES_X(PHP_EXT_DIR(mongodb), $MONGODB_MONGODB_MONITORING, [$STD_CFLAGS $MAINTAINER_CFLAGS $COVERAGE_CFLAGS], shared_objects_mongodb, yes)
   fi
 
 PHP_ARG_WITH(libbson, whether to use system libbson,

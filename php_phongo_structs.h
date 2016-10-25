@@ -80,7 +80,9 @@ typedef struct {
 
 typedef struct {
 	PHONGO_ZEND_OBJECT_PRE
+	int                 manager_id; /* Unique random ID for each manager */
 	mongoc_client_t    *client;
+	HashTable           subscribers;
 	PHONGO_ZEND_OBJECT_POST
 } php_phongo_manager_t;
 
@@ -208,6 +210,42 @@ typedef struct {
 	int64_t milliseconds;
 	PHONGO_ZEND_OBJECT_POST
 } php_phongo_utcdatetime_t;
+
+typedef struct {
+	PHONGO_ZEND_OBJECT_PRE
+	PHONGO_STRUCT_ZVAL  manager;
+	char               *command_name;
+	uint32_t            server_id;
+	uint64_t            operation_id;
+	uint64_t            request_id;
+	bson_t             *command;
+	char               *database_name;
+	PHONGO_ZEND_OBJECT_POST
+} php_phongo_commandstartedevent_t;
+
+typedef struct {
+	PHONGO_ZEND_OBJECT_PRE
+	PHONGO_STRUCT_ZVAL  manager;
+	char               *command_name;
+	int                 server_id;
+	uint64_t            operation_id;
+	uint64_t            request_id;
+	uint64_t            duration_micros;
+	bson_t             *reply;
+	PHONGO_ZEND_OBJECT_POST
+} php_phongo_commandsucceededevent_t;
+
+typedef struct {
+	PHONGO_ZEND_OBJECT_PRE
+	PHONGO_STRUCT_ZVAL  manager;
+	char               *command_name;
+	int                 server_id;
+	uint64_t            operation_id;
+	uint64_t            request_id;
+	uint64_t            duration_micros;
+	bson_t             *error;
+	PHONGO_ZEND_OBJECT_POST
+} php_phongo_commandfailedevent_t;
 
 #undef PHONGO_ZEND_OBJECT_PRE
 #undef PHONGO_ZEND_OBJECT_POST

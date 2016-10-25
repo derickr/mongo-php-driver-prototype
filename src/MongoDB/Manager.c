@@ -47,6 +47,8 @@
 
 #define PHONGO_MANAGER_URI_DEFAULT "mongodb://127.0.0.1/"
 
+ZEND_EXTERN_MODULE_GLOBALS(mongodb)
+
 PHONGO_API zend_class_entry *php_phongo_manager_ce;
 
 zend_object_handlers php_phongo_handler_manager;
@@ -161,6 +163,17 @@ static void php_phongo_manager_prep_tagsets(zval *options TSRMLS_DC)
 	return;
 } /* }}} */
 
+char *php_phongo_make_manager_hash(zval *manager TSRMLS_DC)
+{
+	char                 *hash;
+	int                   hash_len;
+	php_phongo_manager_t *intern = Z_MANAGER_OBJ_P(manager);
+
+	hash_len = spprintf(&hash, 0, "MANAGER-%09d", intern->manager_id);
+
+	return hash;
+}
+
 /* {{{ proto void Manager::__construct([string $uri = "mongodb://127.0.0.1/"[, array $options = array()[, array $driverOptions = array()]]])
    Constructs a new Manager */
 PHP_METHOD(Manager, __construct)
@@ -171,11 +184,16 @@ PHP_METHOD(Manager, __construct)
 	phongo_zpp_char_len       uri_string_len = 0;
 	zval                     *options = NULL;
 	zval                     *driverOptions = NULL;
+	char                     *manager_hash_string;
 	SUPPRESS_UNUSED_WARNING(return_value) SUPPRESS_UNUSED_WARNING(return_value_ptr) SUPPRESS_UNUSED_WARNING(return_value_used)
 
-
 	zend_replace_error_handling(EH_THROW, phongo_exception_from_phongo_domain(PHONGO_ERROR_INVALID_ARGUMENT), &error_handling TSRMLS_CC);
+
 	intern = Z_MANAGER_OBJ_P(getThis());
+	manager_hash_string = php_phongo_make_manager_hash(getThis() TSRMLS_CC);
+	zend_hash_update(&MONGODB_G(managers), manager_hash_string, sizeof(manager_hash_string), (void*) &getThis(), sizeof(zval*), NULL);
+	Z_ADDREF_P(getThis());
+	efree(manager_hash_string);
 
 	/* Separate the driverOptions zval, since we may end up modifying it in
 	 * php_phongo_manager_merge_context_options() below. */
@@ -195,6 +213,13 @@ PHP_METHOD(Manager, __construct)
 	}
 
 	phongo_manager_init(intern, uri_string ? uri_string : PHONGO_MANAGER_URI_DEFAULT, options, driverOptions TSRMLS_CC);
+
+	/* Create hash for APM subscribers, and set callbacks */
+	zend_hash_init(&intern->subscribers, 0, NULL, ZVAL_PTR_DTOR, 0);
+
+	if (intern->client) {
+		php_phongo_set_monitoring_callbacks(intern->client, getThis() TSRMLS_CC);
+	}
 }
 /* }}} */
 
@@ -390,6 +415,84 @@ PHP_METHOD(Manager, selectServer)
 }
 /* }}} */
 
+static char *php_phongo_make_subscriber_hash(zval *subscriber TSRMLS_DC)
+{
+	char *hash;
+	int   hash_len;
+
+	hash_len = spprintf(&hash, 0, "SUBS-%09d", Z_OBJ_HANDLE_P(subscriber));
+
+	return hash;
+}
+
+/* {{{ proto void Manager::addSubscriber(MongoDB\Driver\Monitoring\Subscriber $subscriber)
+   Adds a monitoring subscriber to the set of subscribers */
+PHP_METHOD(Manager, addSubscriber)
+{
+	php_phongo_manager_t         *intern;
+	SUPPRESS_UNUSED_WARNING(return_value_ptr) SUPPRESS_UNUSED_WARNING(return_value_used)
+	zval                         *zSubscriber = NULL;
+	char                         *hash;
+
+	intern = Z_MANAGER_OBJ_P(getThis());
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "O", &zSubscriber, php_phongo_subscriber_ce) == FAILURE) {
+		return;
+	}
+
+	hash = php_phongo_make_subscriber_hash(zSubscriber TSRMLS_CC);
+
+	/* If we have already stored the subscriber, bail out. Otherwise, add
+	 * subscriber to list */
+#if PHP_VERSION_ID >= 70000
+	zval *subscriber;
+
+	if (subscriber = zend_hash_str_find(&intern->subscribers, hash, sizeof(hash)-1)) {
+		return;
+	}
+
+	zend_hash_str_update(&intern->subscribers, hash, sizeof(hash)-1, zSubscriber);
+#else
+	zval **subscriber;
+
+	if (zend_hash_find(&intern->subscribers, hash, sizeof(hash), (void**) &subscriber) == SUCCESS) {
+		return;
+	}
+
+	zend_hash_update(&intern->subscribers, hash, sizeof(hash), (void*) &zSubscriber, sizeof(zval*), NULL);
+#endif
+	Z_ADDREF_P(zSubscriber);
+	efree(hash);
+}
+/* }}} */
+
+/* {{{ proto void Manager::removeSubscriber(MongoDB\Driver\Monitoring\Subscriber $subscriber)
+   Removes a monitoring subscriber from the set of subscribers */
+PHP_METHOD(Manager, removeSubscriber)
+{
+	php_phongo_manager_t         *intern;
+	SUPPRESS_UNUSED_WARNING(return_value_ptr) SUPPRESS_UNUSED_WARNING(return_value_used)
+	zval                         *zSubscriber = NULL;
+	char                         *hash;
+
+	intern = Z_MANAGER_OBJ_P(getThis());
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "O", &zSubscriber, php_phongo_subscriber_ce) == FAILURE) {
+		return;
+	}
+
+	hash = php_phongo_make_subscriber_hash(zSubscriber TSRMLS_CC);
+
+#if PHP_VERSION_ID >= 70000
+	zend_hash_str_del(&intern->subscribers, hash, sizeof(hash)-1);
+#else
+	zend_hash_del(&intern->subscribers, hash, sizeof(hash)-1);
+#endif
+	efree(hash);
+}
+/* }}} */
+
+
 /* {{{ proto void MongoDB\Driver\Manager::__wakeup()
    Throws MongoDB\Driver\RuntimeException (serialization is not supported) */
 PHP_METHOD(Manager, __wakeup)
@@ -446,6 +549,14 @@ ZEND_BEGIN_ARG_INFO_EX(ai_Manager_selectServer, 0, 0, 1)
 	ZEND_ARG_OBJ_INFO(0, readPreference, MongoDB\\Driver\\ReadPreference, 1)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Manager_addSubscriber, 0, 0, 1)
+	ZEND_ARG_INFO(0, subscriber)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(ai_Manager_removeSubscriber, 0, 0, 1)
+	ZEND_ARG_INFO(0, subscriber)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_INFO_EX(ai_Manager_void, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
@@ -459,12 +570,13 @@ static zend_function_entry php_phongo_manager_me[] = {
 	PHP_ME(Manager, getServers, ai_Manager_void, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
 	PHP_ME(Manager, getWriteConcern, ai_Manager_void, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
 	PHP_ME(Manager, selectServer, ai_Manager_selectServer, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
+	PHP_ME(Manager, addSubscriber, ai_Manager_addSubscriber, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
+	PHP_ME(Manager, removeSubscriber, ai_Manager_removeSubscriber, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
 	PHP_ME(Manager, __wakeup, ai_Manager_void, ZEND_ACC_PUBLIC)
 	PHP_FE_END
 };
 
 /* }}} */
-
 
 /* {{{ php_phongo_manager_t object handlers */
 static void php_phongo_manager_free_object(phongo_free_object_arg *object TSRMLS_DC) /* {{{ */
@@ -477,6 +589,8 @@ static void php_phongo_manager_free_object(phongo_free_object_arg *object TSRMLS
 		MONGOC_DEBUG("Not destroying persistent client for Manager");
 		intern->client = NULL;
 	}
+
+	zend_hash_destroy(&intern->subscribers);
 
 #if PHP_VERSION_ID < 70000
 	efree(intern);
@@ -491,6 +605,9 @@ phongo_create_object_retval php_phongo_manager_create_object(zend_class_entry *c
 
 	zend_object_std_init(&intern->std, class_type TSRMLS_CC);
 	object_properties_init(&intern->std, class_type);
+
+	/* Set random number to use in the "list" that we need for APM */
+	intern->manager_id = rand();
 
 #if PHP_VERSION_ID >= 70000
 	intern->std.handlers = &php_phongo_handler_manager;
